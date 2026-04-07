@@ -12,20 +12,33 @@ app = Flask(__name__, template_folder='static')
 CORS(app, support_crenditals=True, resources={r"/*": {"origins": "*"}}, send_wildcard=True)
 
 
-def _get_bundle_id():
-    target_bundle = ''
-    for info in device.installation.iter_installed():
-        display_name = info['CFBundleDisplayName']
-        if display_name == 'WebDriverAgentRunner-Runner':
-            target_bundle = info['CFBundleIdentifier']
-            return target_bundle
-    if target_bundle == '':
-        raise Exception('No Bundle!!!!')
+def _load_device_config():
+    config_path = os.path.join(os.path.abspath(''), 'device.json')
+    if not os.path.exists(config_path):
+        return {}
+
+    with open(config_path, 'r', encoding='utf-8') as fp:
+        return json.load(fp)
+
+
+def _resolve_device_udid():
+    config = _load_device_config()
+    configured_udid = os.environ.get('IOS_REMOTE_UDID') or config.get('udid', '').strip()
+    if configured_udid:
+        return configured_udid
+
+    usb_devices = [info for info in tidevice.Usbmux().device_list() if info.conn_type.value == 'usb']
+    if len(usb_devices) == 1:
+        return usb_devices[0].udid
+    if len(usb_devices) == 0:
+        raise RuntimeError('No USB device connected')
+
+    device_list = ', '.join(info.udid for info in usb_devices)
+    raise RuntimeError(f'Multiple USB devices connected, please configure device.json or IOS_REMOTE_UDID: {device_list}')
 
 
 def connect_device():
-    bundle_id = _get_bundle_id()
-    c = wda.USBClient(wda_bundle_id=bundle_id)
+    c = wda.USBClient(udid=device_udid)
     return c
 
 
@@ -132,9 +145,8 @@ def send():
 
 if __name__ == '__main__':
     path = os.path.abspath('')
-    cmds = {'remote': 'tidevice relay {0} 9100'}
-    device = tidevice.Device()
-    # um = tidevice.Usbmux()
-    # device_udid_list = um.device_udid_list()
+    device_udid = _resolve_device_udid()
+    cmds = {'remote': f'tidevice -u {device_udid} relay {{0}} 9100'}
+    device = tidevice.Device(device_udid)
     client = connect_device()
     app.run(debug=True)
